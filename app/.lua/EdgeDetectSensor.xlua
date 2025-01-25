@@ -1,0 +1,26 @@
+-- Generic any edge button click sensor
+-- pin: the gpio #
+-- bounceTimeout: do not detect new changes during this time
+-- cb: the sensor callback
+-- Similar code explained here in Section 2:
+--  https://realtimelogic.com/articles/Your-First-IoT-Project
+return function(pin,bounceTimeout,cb)
+   local state
+   local isDebouncing = false -- Track debounce state
+   local debounceTimer = ba.timer(function() isDebouncing=false end)   
+   local cfg={
+      pullup=true,
+      type="ANYEDGE",
+      callback=function(newState)
+	 if newState ~= state and not isDebouncing then
+	    state=newState
+	    isDebouncing = true
+	    debounceTimer:set(bounceTimeout)
+	    cb(state)
+	 end
+      end
+   }
+   local gpio=esp32.gpio(pin,"IN", cfg)
+   state=gpio:value()
+   return gpio
+end

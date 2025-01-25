@@ -1,0 +1,164 @@
+--- Begin authentication code
+local rwdb=io:dofile".lua/db.lua"
+local aeskey=ba.aeskey()
+
+
+function getCredentials()
+   return next(rwdb() or {})
+end
+
+function saveCredentials(username,password)
+   rwdb{[username]=password}
+end
+
+function createLoginCookie(cmd)
+   local cookie=cmd:createcookie"garagedoor"
+   local data=ba.json.encode{peer=cmd:peername(), ua=cmd:header"user-agent"}
+   cookie:value(ba.aesencode(aeskey,data))
+   cookie:httponly()
+   if cmd:issecure() then cookie:secure(true) end
+   cookie:maxage(2592000) -- Set Max-Age to 30 days (30 * 24 * 60 * 60 seconds)
+   cookie:activate()
+end
+
+function isAuthenticated(cmd)
+   local cookie=cmd:cookie"garagedoor"
+   if cookie then
+      local t=ba.json.decode(ba.aesdecode(aeskey, cookie:value() or "") or "")
+      if t and cmd:peername() == t.peer and cmd:header"user-agent" == t.ua then
+	 createLoginCookie(cmd)
+	 return true
+      end
+   end
+   return false
+end
+
+--- End authentication code
+
+
+-- The broker used by the logic below
+local smq=require"smq.hub".create()
+local checkDoorTimer -- set if active
+local isOpen -- garage
+local gracePeriod=false
+
+local function pubIsOpen() smq:publish({isOpen=isOpen},"isOpen"); end
+
+local function sendEmail()
+   xedge.elog({ts=true},isOpen and "Open" or "Closed")
+   local op={
+      subject="Garage door: "..(isOpen and "open" or "closed"),
+   }
+   xedge.eflush(op)
+end
+
+--- Begin garage open/close and door open sensor logic
+
+function app.isOpen() return isOpen end -- Used by index.lsp
+
+local newSensor=io:dofile".lua/EdgeDetectSensor.xlua"
+
+local garageSensorGpio=newSensor(8, 2000, function(state)
+   -- The state true means door is closed
+   isOpen = not state
+   tracep(10,"garageSensorGpio",isOpen,checkDoorTimer)
+   pubIsOpen()
+   sendEmail()
+   if checkDoorTimer then
+      checkDoorTimer:cancel()
+      checkDoorTimer=nil
+   end
+   tracep(10,"Button state",state)
+end)
+isOpen = not garageSensorGpio:value()
+
+local garageRemoteGpio=esp32.gpio(9,"OUT")
+
+local garageRemoteTimer
+local function clickGarageRemote()
+   if not garageRemoteTimer then
+      tracep(10,"Garage remote ON")
+      garageRemoteGpio:value(true)
+      garageRemoteTimer=ba.timer(function()
+	 tracep(10,"Garage remote OFF")
+	 garageRemoteTimer=nil
+	 garageRemoteGpio:value(false)
+      end)
+      garageRemoteTimer:set(1500)
+   end
+end
+
+--- End garage open/close and door open sensor logic
+
+
+
+--- Begin SMQ pub/sub client interaction code
+
+local function subSelf(subtop, cb)
+   smq:subscribe("self",{subtopic=subtop,json=true,onmsg=cb})
+end
+
+subSelf("startOpening", function(t,ptid)
+   if gracePeriod then
+      smq:publish(t,"stopOpening");
+      return
+   end
+   t.ptid=ptid
+   tracep(10,"startOpening",ba.json.encode(t))
+   smq:publish(t,"startOpening");
+end)
+
+subSelf("stopOpening", function(t,ptid)
+   tracep(10,"stopOpening",ba.json.encode(t))
+   t.ptid=ptid
+   smq:publish(t,"stopOpening");
+end)
+
+-- isOpen is a 'set' command sent from the client
+subSelf("isOpen", function(t,ptid)
+   tracep(10,"isOpen",ba.json.encode(t),isOpen,ptid,gracePeriod)
+   if gracePeriod then
+      smq:publish(t,"stopOpening");
+      return
+   end
+   gracePeriod=true
+   ba.timer(function() gracePeriod=false end):set(3000,true)
+   clickGarageRemote()
+   smq:publish(t,"isOpen");
+   -- Note, we do not set local isOpen state here; We wait for
+   -- 'garageSensorGpio' and timer below, whatever comes first.
+   if not checkDoorTimer then 
+      checkDoorTimer = ba.timer(function()
+	 local newIsOpen = not garageSensorGpio:value() -- true means door is closed
+         if newIsOpen ~= isOpen then
+            isOpen=newIsOpen
+            sendEmail()
+         end
+	 tracep(10,"checkDoorTimer",isOpen)
+	 pubIsOpen()
+	 checkDoorTimer=nil
+      end)
+   end
+   -- Assuming it does not take more than 20 seconds to open or close the door.
+   checkDoorTimer:set(20000)
+end)
+
+subSelf("ready", function(t)
+   tracep(10,ba.json.encode(t))
+   pubIsOpen()
+end)
+
+
+-- Called by smq.lsp
+function smqConnect(request)
+   smq:connect(request) -- Upgrade HTTP(S) request to SMQ connection
+end
+
+
+--- End SMQ pub/sub client interaction code
+
+
+-- Called when app terminates
+function onunload()
+   smq:shutdown"Broker app shutting down!"
+end

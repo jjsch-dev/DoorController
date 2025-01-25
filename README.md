@@ -64,7 +64,7 @@ The Lua code is designed for the Xedge32 development environment, which is very 
   * Compress the app directory into a ZIP file (e.g., DoorController.zip), ensuring the directory name is excluded. As an example, the index.lsp file must be at the root of the ZIP for the app to function.
   * Example:
   ```
-  git https://github.com/jjsch-dev/DoorController
+  git clone https://github.com/jjsch-dev/DoorController
   cd DoorController/app
   zip -D -q -u -r -9 ../DoorController.zip .
   

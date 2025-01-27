@@ -49,7 +49,7 @@ Here are the main components I used for this project, though any compatible comp
   * Connect the NC (Normally Closed) pin of the switch to GPIO 8 of the ESP32.
 
 
-## Software Instructions
+## Garage Door App Software Instructions
 
 This project includes ready-to-use source code. You can use the code as is, but it is very easy to change it since the code running on the ESP32 is implemented in the Lua scripting language. The code can be used without modifications if you use the same GPIO numbers I used in my design.
 
@@ -82,6 +82,21 @@ The Lua code is designed for the Xedge32 development environment, which is very 
   * Access the garage controller interface at http://xedge.local/ in a separate browser window. Enter a username and password and click the Save button. Login using the credentials you set.
   * You should see the garage door on/off button after logging in. Hold the on/off button for 1.5 seconds to open/close the door.
   * Move the magnet near the reed switch to test the door's open/closed state. The switch should register as "closed" when the magnet is near and "open" otherwise.
+
+
+### How the Login Mechanism Works
+
+After the initial login, the door app remembers your browser client by storing a fingerprint. This fingerprint includes the IP address of the client (the phone). Once logged in, the browser won't require you to re-enter the password as long as it is accessed at least once every 30 days. If the client's IP address changes, the fingerprint becomes invalid, and you'll be prompted to log in again.
+
+### Preventing Re-Entering The Password With Address Reservation
+
+To avoid issues caused by changing IP addresses (common with dynamic IP allocation on home networks), you can use **Address Reservation** , a feature available on most home routers. Here's how to set it up:
+
+1. Log in to your home router's admin interface (usually accessible via a browser at an address like 192.168.0.1 or 192.168.1.1).
+2. Locate the **DHCP Settings** or **Address Reservation** section.
+3. Find the phone and its MAC address. This is typically displayed in the router's connected devices list.
+4. Assign a fixed (static) IP address to the phone using the phone's MAC address.
+
 
 # Password-Protecting the Xedge32 IDE
 
